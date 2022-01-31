@@ -129,8 +129,9 @@ namespace QQBot.Plugin.Shared.Util
                 g.Clear(coverAvgColor);
                 // 贴上曲绘
                 g.DrawImage(cover, width, 0);
+                g.FillRectangle(new SolidBrush(coverAvgColor), 0, 0, width + 2, width);
                 // 贴上渐变的主题色
-                g.FillRectangle(gradiantCoverColorBrush, new Rectangle(width, 0, width, width));
+                g.FillRectangle(gradiantCoverColorBrush, new Rectangle(width - 5, 0, width - 5, width));
             }
 
             // 圆角

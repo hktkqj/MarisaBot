@@ -10,7 +10,7 @@ namespace QQBot.Plugin;
 [MiraiPluginTrigger(typeof(MiraiPluginTrigger), nameof(MiraiPluginTrigger.PlainTextTrigger))]
 public class Peek : MiraiPluginBase
 {
-    private bool _peekEnabled = true;
+    private bool _peekEnabled = false;
 
     private static string CaptureScreen(bool hide = true)
     {
