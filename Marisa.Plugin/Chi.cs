@@ -1,5 +1,6 @@
 ﻿namespace Marisa.Plugin;
 
+[MarisaPluginDoc("这是一个用来解决「中午吃什么」这一人生 N 大难题之一的功能")]
 [MarisaPluginCommand(true, "吃啥", "吃什么")]
 public class Chi : MarisaPluginBase
 {
@@ -35,7 +36,7 @@ public class Chi : MarisaPluginBase
         return Zuo(id) ? "生吃你妈 问这么多还不知道吃啥饿死你个臭傻逼" : ConfigurationManager.Configuration.Chi.RandomTake();
     }
 
-    [MarisaPluginTrigger(typeof(MarisaPluginTrigger), nameof(MarisaPluginTrigger.PlainTextTrigger))]
+    [MarisaPluginTrigger(nameof(MarisaPluginTrigger.PlainTextTrigger))]
     private MarisaPluginTaskState Proc(Message message)
     {
         var sender = message.Sender!.Id;

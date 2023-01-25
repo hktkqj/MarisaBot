@@ -2,6 +2,7 @@
 
 namespace Marisa.Plugin;
 
+[MarisaPluginNoDoc]
 [MarisaPlugin(PluginPriority.Command)]
 [MarisaPluginCommand(":cmd")]
 public class Command : MarisaPluginBase

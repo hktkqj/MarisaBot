@@ -17,16 +17,16 @@ public class Message
     public MessageType Type;
     private readonly MessageSenderProvider _sender;
 
-    public Message(IEnumerable<MessageData.MessageData> message, MessageSenderProvider sender)
-    {
-        _sender      = sender;
-        MessageChain = new MessageChain(message);
-        Command      = MessageChain.Text.Trim();
-    }
-
     public Message(MessageChain chain, MessageSenderProvider sender)
     {
         MessageChain = chain;
+        _sender      = sender;
+        Command      = MessageChain.Text.Trim();
+    }
+
+    public Message(MessageSenderProvider sender, params MessageData.MessageData[] md)
+    {
+        MessageChain = new MessageChain(md);
         _sender      = sender;
         Command      = MessageChain.Text.Trim();
     }
@@ -42,6 +42,13 @@ public class Message
     public bool IsAt(long target)
     {
         return MessageChain!.Messages.Any(m => m.Type == MessageDataType.At && (m as MessageDataAt)!.Target == target);
+    }
+
+    public IEnumerable<long> At()
+    {
+        return MessageChain!.Messages
+            .Where(m => m.Type == MessageDataType.At)
+            .Select(m => (m as MessageDataAt)!.Target);
     }
 
     /// <summary>
@@ -73,17 +80,17 @@ public class Message
     /// </summary>
     public void Reply(MessageChain message, bool quote = true)
     {
-        _sender.Reply(message, this, quote && MessageChain!.CanBeReferenced);
+        _sender.Reply(message, this, quote && MessageChain!.CanBeReferenced).Wait();
     }
 
     public void Reply(MessageData.MessageData message, bool quote = true)
     {
-        _sender.Reply(message, this, quote && MessageChain!.CanBeReferenced);
+        _sender.Reply(message, this, quote && MessageChain!.CanBeReferenced).Wait();
     }
 
     public void Reply(params MessageData.MessageData[] messages)
     {
-        _sender.Reply(new MessageChain(messages), this, MessageChain!.CanBeReferenced);
+        _sender.Reply(new MessageChain(messages), this, MessageChain!.CanBeReferenced).Wait();
     }
 
     /// <summary>

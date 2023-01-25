@@ -1,5 +1,4 @@
 ﻿using System.Reflection;
-using System.Threading.Tasks.Dataflow;
 using Marisa.BotDriver.DI;
 using Marisa.BotDriver.DI.Message;
 using Marisa.BotDriver.Entity.Message;
@@ -19,7 +18,8 @@ public abstract class BotDriver
     protected readonly MessageSenderProvider MessageSenderProvider;
     protected readonly MessageQueueProvider MessageQueueProvider;
 
-    protected BotDriver(IServiceProvider serviceProvider, IEnumerable<MarisaPluginBase> plugins,
+    protected BotDriver(
+        IServiceProvider serviceProvider, IEnumerable<MarisaPluginBase> plugins,
         DictionaryProvider dict, MessageSenderProvider messageSenderProvider,
         MessageQueueProvider messageQueueProvider)
     {
@@ -66,7 +66,9 @@ public abstract class BotDriver
     /// <exception cref="Exception"></exception>
     protected virtual async Task ProcMessage()
     {
-        bool Check(Message message, IReadOnlyCollection<MarisaPluginCommand> commands, IReadOnlyCollection<MarisaPluginTrigger> triggers)
+        bool Check(
+            Message message, IReadOnlyCollection<MarisaPluginCommand> commands,
+            IReadOnlyCollection<MarisaPluginTrigger> triggers)
         {
             if (triggers.Any())
             {
@@ -99,7 +101,8 @@ public abstract class BotDriver
             return Check(message, commands, triggers);
         }
 
-        const BindingFlags bindingFlags = BindingFlags.Default | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public;
+        const BindingFlags bindingFlags = BindingFlags.Default | BindingFlags.NonPublic | BindingFlags.Instance |
+            BindingFlags.Static | BindingFlags.Public;
 
         var availablePlugins = Plugins.Where(p =>
             p.GetType().GetCustomAttributes<MarisaPluginTrigger>().Any() ||
@@ -133,6 +136,8 @@ public abstract class BotDriver
 
         async IAsyncEnumerable<MarisaPluginTaskState> TrigPlugin(MarisaPluginBase plugin, Message message)
         {
+            // 每次进入循环都会将 command 的头去掉，因此记录一下原始的 command，在每次循环结束后还原头
+            var command = message.Command;
             foreach (var method in availableMethods[plugin].Where(m => CheckMember(m, message)))
             {
                 var m = method;
@@ -198,7 +203,7 @@ public abstract class BotDriver
                     var target    = message.Location;
                     var exception = e.InnerException?.ToString() ?? e.ToString();
 
-                    MessageSenderProvider.Send(exception, message.Type, target, null);
+                    await MessageSenderProvider.Send(exception, message.Type, target, null);
                 }
 
                 if (ret != null)
@@ -209,32 +214,41 @@ public abstract class BotDriver
                     //    若是 A 的触发前缀是空字符串，则没有影响
                     // 2. 同上，但是有 Trigger 的参与，此时没什么影响，还是应当设计成子命令的形式
                     // 3. 只有 Trigger 作用，没什么要注意的
-                    yield return (MarisaPluginTaskState) ret;
+                    yield return (MarisaPluginTaskState)ret;
                 }
+
+                message.Command = command;
             }
+
+            message.Command = command;
         }
 
         var taskList = new List<Task>();
 
-        while (await MessageQueueProvider.RecvQueue.OutputAvailableAsync())
+        while (await MessageQueueProvider.RecvQueue.Reader.WaitToReadAsync())
         {
-            var messageRecv = MessageQueueProvider.RecvQueue.ReceiveAllAsync();
-            
+            var messageRecv = MessageQueueProvider.RecvQueue.Reader.ReadAllAsync();
+
             taskList.Add(Parallel.ForEachAsync(messageRecv, async (message, _) =>
             {
+                // 这种写法非常的丑陋，并且很容易出 BUG，应该让 CheckMember 没有副作用
                 var command = message.Command;
 
                 foreach (var plugin in availablePlugins.Where(p => CheckMember(p.GetType(), message)))
                 {
                     var shouldBreak = false;
 
+                    // TrigPlugin 虽然会修改 command，但是最后我把它还原了，这里可能出 BUG
                     await foreach (var state in TrigPlugin(plugin, message))
                     {
-                        if (state == MarisaPluginTaskState.CompletedTask) shouldBreak = true;
+                        if (state != MarisaPluginTaskState.CompletedTask) continue;
+
+                        shouldBreak = true;
+                        break;
                     }
 
                     message.Command = command;
-                    
+
                     if (shouldBreak) break;
                 }
             }));
@@ -252,7 +266,7 @@ public abstract class BotDriver
     /// 从服务器拉取消息并更新接收队列
     /// </summary>
     protected abstract Task RecvMessage();
-    
+
     /// <summary>
     /// 从接收队列接收消息并发送到服务器
     /// </summary>
@@ -263,6 +277,7 @@ public abstract class BotDriver
     /// </summary>
     public virtual async Task Invoke()
     {
-        await Task.WhenAll(RecvMessage(), SendMessage(), ProcMessage());
+        await Task.WhenAll(Parallel.ForEachAsync(Plugins, async (p, _) => await p.BackgroundService()),
+            RecvMessage(), SendMessage(), ProcMessage());
     }
 }

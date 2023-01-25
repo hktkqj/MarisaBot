@@ -6,6 +6,7 @@ namespace Marisa.BotDriver.Entity.MessageData;
 [JsonConverter(typeof(StringEnumConverter))]
 public enum MessageDataType
 {
+    // Message
     Id,
     Quote,
     At,
@@ -24,5 +25,11 @@ public enum MessageDataType
     Forward,
     File,
     MiraiCode,
+    // Event
+    NewMember,
+    MemberLeave,
+    BotMute,
+    BotUnmute,
+    // others
     Unknown
 }

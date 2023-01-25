@@ -18,9 +18,9 @@ public partial class Arcaea
                 File.ReadAllText(ResourceManager.ResourcePath + "/SongInfo.json")
             ) as dynamic[];
 
-            return data.Select(d => new ArcaeaSong(d)).ToList();
+            return data!.Select(d => new ArcaeaSong(d)).ToList();
         },
         nameof(BotDbContext.ArcaeaGuesses),
-        (id, handler) => Dialog.AddHandler(id, null, handler)
+        Dialog.AddHandler
     );
 }

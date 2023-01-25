@@ -26,10 +26,19 @@ public partial class MaiMaiDx
                 var data = JsonConvert.DeserializeObject<ExpandoObject[]>(
                     File.ReadAllText(ResourceManager.ResourcePath + "/SongInfo.json")
                 ) as dynamic[];
-                return data.Select(d => new MaiMaiSong(d)).ToList();
+                return data!.Select(d => new MaiMaiSong(d)).ToList();
             }
         },
         nameof(BotDbContext.MaiMaiDxGuesses),
-        (id, handler) => Dialog.AddHandler(id, null, handler)
+        Dialog.AddHandler
     );
+
+    public IEnumerable<MaiMaiSong> SongsMissCover()
+    {
+        return _songDb.SongList.Where(s =>
+        {
+            var p = Path.Join(ResourceManager.ResourcePath, "cover", s.Id.ToString());
+            return !(File.Exists(p + ".jpg") || File.Exists(p + ".png") || File.Exists(p + ".jpeg"));
+        });
+    }
 }

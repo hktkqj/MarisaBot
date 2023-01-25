@@ -1,323 +1,466 @@
-﻿using System.Drawing;
-using System.Drawing.Drawing2D;
-using System.Drawing.Imaging;
+﻿using SixLabors.Fonts;
+using SixLabors.ImageSharp;
+using SixLabors.ImageSharp.Advanced;
+using SixLabors.ImageSharp.Drawing;
+using SixLabors.ImageSharp.Drawing.Processing;
+using SixLabors.ImageSharp.Formats.Jpeg;
+using SixLabors.ImageSharp.Formats.Png;
+using SixLabors.ImageSharp.PixelFormats;
+using SixLabors.ImageSharp.Processing;
+using SixLabors.ImageSharp.Processing.Processors.Quantization;
 
 namespace Marisa.Utils;
 
 public static class ImageDraw
 {
-    public static Bitmap Resize(this Image img, int width, int height)
+    #region Round Corner
+
+    public static Image RoundCorners(this Image image, int cornerRadius)
     {
-        var result = new Bitmap(width, height);
-
-        using var g = Graphics.FromImage(result);
-
-        g.DrawImage(img, 0, 0, width, height);
-
-        return result;
+        image.Mutate(i => i.RoundCorners(cornerRadius));
+        return image;
     }
 
-    public static Bitmap Resize(this Bitmap img, double times)
+    public static IPathCollection BuildCorners(int imageWidth, int imageHeight, float cornerRadius)
     {
-        var width  = img.Width  * times;
-        var height = img.Height * times;
+        var rect = new RectangularPolygon(-0.5f, -0.5f, cornerRadius, cornerRadius);
 
-        var result = new Bitmap((int)width, (int)height);
+        var cornerTopLeft = rect.Clip(new EllipsePolygon(cornerRadius - 0.5f, cornerRadius - 0.5f, cornerRadius));
 
-        using var g = Graphics.FromImage(result);
+        var rightPos  = imageWidth - cornerTopLeft.Bounds.Width + 1;
+        var bottomPos = imageHeight - cornerTopLeft.Bounds.Height + 1;
 
-        g.DrawImage(img, 0, 0, (int)width, (int)height);
+        var cornerTopRight    = cornerTopLeft.RotateDegree(90).Translate(rightPos, 0);
+        var cornerBottomLeft  = cornerTopLeft.RotateDegree(-90).Translate(0, bottomPos);
+        var cornerBottomRight = cornerTopLeft.RotateDegree(180).Translate(rightPos, bottomPos);
 
-        return result;
+        return new PathCollection(cornerTopLeft, cornerBottomLeft, cornerTopRight, cornerBottomRight);
     }
 
-    public static Bitmap RoundCorners(this Image startImage, int cornerRadius)
+    public static IImageProcessingContext RoundCorners(this IImageProcessingContext ctx, int cornerRadius)
     {
-        cornerRadius *= 2;
+        var size    = ctx.GetCurrentSize();
+        var corners = BuildCorners(size.Width, size.Height, cornerRadius);
 
-        var roundedImage = new Bitmap(startImage.Width, startImage.Height);
-
-        using (var g = Graphics.FromImage(roundedImage))
+        ctx.SetGraphicsOptions(new GraphicsOptions
         {
-            g.SmoothingMode = SmoothingMode.AntiAlias;
+            // enforces that any part of this shape that has color is punched out of the background
+            AlphaCompositionMode = PixelAlphaCompositionMode.DestOut
+        });
 
-            Brush brush = new TextureBrush(startImage);
-            var   gp    = new GraphicsPath();
-
-            gp.AddArc(0, 0, cornerRadius, cornerRadius, 180, 90);
-            gp.AddArc(0 + roundedImage.Width - cornerRadius, 0, cornerRadius, cornerRadius, 270, 90);
-            gp.AddArc(0 + roundedImage.Width - cornerRadius, 0 + roundedImage.Height - cornerRadius, cornerRadius,
-                cornerRadius, 0, 90);
-            gp.AddArc(0, 0 + roundedImage.Height - cornerRadius, cornerRadius, cornerRadius, 90, 90);
-            g.FillPath(brush, gp);
-
-            return roundedImage;
-        }
+        return ctx.Fill(Color.Red, corners);
     }
 
-    public static Color CalculateAverageColor(this Bitmap bm, Rectangle rec)
+    #endregion
+
+    #region Dominant Color
+
+    public static Color DominantColor(this Image image, Rectangle rectangle)
     {
-        var       width        = bm.Width;
-        var       height       = bm.Height;
-        const int minDiversion = -1;
-        // keep track of dropped pixels
-        var    dropped = 0;
-        long[] totals  = { 0, 0, 0 };
-        // cutting corners, will fail on anything else but 32 and 24 bit images
-        var bppModifier = bm.PixelFormat == PixelFormat.Format24bppRgb ? 3 : 4;
-
-        var srcData = bm.LockBits(rec, ImageLockMode.ReadOnly, bm.PixelFormat);
-        var stride  = srcData.Stride;
-        var scan0   = srcData.Scan0;
-
-        unsafe
-        {
-            var p = (byte*)(void*)scan0;
-
-            for (var y = rec.Top; y < rec.Bottom; y++)
+        var rgba32 = image.Clone(i => i
+            .Crop(rectangle)
+            .Quantize(new OctreeQuantizer(new QuantizerOptions()
             {
-                for (var x = rec.Left; x < rec.Right; x++)
-                {
-                    var idx   = y * stride + x * bppModifier;
-                    int red   = p[idx + 2];
-                    int green = p[idx + 1];
-                    int blue  = p[idx];
-                    if (Math.Abs(red   - green) > minDiversion || Math.Abs(red - blue) > minDiversion ||
-                        Math.Abs(green - blue)  > minDiversion)
-                    {
-                        totals[2] += red;
-                        totals[1] += green;
-                        totals[0] += blue;
-                    }
-                    else
-                    {
-                        dropped++;
-                    }
-                }
-            }
-        }
+                MaxColors = 1
+            }))
+        ).CloneAs<Rgba32>()[0, 0];
 
-        bm.UnlockBits(srcData);
-
-        var count = rec.Width * rec.Height - dropped;
-        count = count == 0 ? 1 : count;
-        var avgR = (int)(totals[2] / count);
-        var avgG = (int)(totals[1] / count);
-        var avgB = (int)(totals[0] / count);
-
-        return Color.FromArgb(avgR, avgG, avgB);
-    }
-
-    public static (Bitmap coverBackground, Color coverAvgColor) GetCoverBackground(this Bitmap cover)
-    {
-        var       width        = cover.Width;
-        const int cornerRadius = 20;
-
-        cover = Resize(cover, width, width);
-
-        // 主题色
-        var coverAvgColor = CalculateAverageColor(cover, new Rectangle(0, 0, 5, cover.Height));
-
-        var coverBackground = new Bitmap(width * 2, width);
-
-        var rec = new Rectangle(width, 0, width, width);
-
-        using (var g = Graphics.FromImage(coverBackground))
-        {
-            // 设置背景色
-            g.Clear(coverAvgColor);
-            // 贴上曲绘
-            g.DrawImage(cover, width, 0);
-            // 贴上渐变的主题色
-            for (var i = rec.Left; i < rec.Right; i += 1)
-            {
-                var c = new SolidBrush(Color.FromArgb(255 - 255 * (i - rec.Left) / rec.Width, coverAvgColor));
-                g.DrawLine(new Pen(c, 1), i, 0 , i, rec.Height);
-            }
-        }
-
-        // 圆角
-        coverBackground = RoundCorners(coverBackground, cornerRadius);
-        return (coverBackground, coverAvgColor);
+        return Color.FromRgba(rgba32.R, rgba32.G, rgba32.B, rgba32.A);
     }
 
     public static Color SelectFontColor(this Color c)
     {
+        var color = c.ToPixel<Rgba32>();
+
         var brightness = (int)Math.Sqrt(
-            c.R * c.R * .241 +
-            c.G * c.G * .691 +
-            c.B * c.B * .068);
+            color.R * color.R * .241 +
+            color.G * color.G * .691 +
+            color.B * color.B * .068);
         return brightness > 130 ? Color.Black : Color.White;
     }
 
-    public static Bitmap Copy(this Bitmap c)
+    #endregion
+
+    #region 不知道怎么分类的
+
+    public static Image GetCoverBackground(this Image cover)
     {
-        return (Bitmap)c.Clone();
-    }
+        var       width        = cover.Width;
+        const int cornerRadius = 20;
 
-    public static Bitmap GetStringCard(string text, int fontSize, Color fontColor, Color bgColor, int width,
-        int height, int pl = 30, bool center = false, bool underLine = true)
-    {
-        var background = new Bitmap(width, height);
+        cover.Mutate(i => i.Resize(width, width));
 
-        using var g = Graphics.FromImage(background);
+        // 主题色
+        var coverDominantColor = cover.DominantColor(new Rectangle(0, 0, 5, cover.Height));
+        var colorPixel         = coverDominantColor.ToPixel<Rgba32>();
 
-        // 调整字体大小
-        var font = new Font("Consolas", fontSize);
+        var coverBackground = new Image<Rgba32>(width * 2, width);
 
-        while (g.MeasureString(text, font).Width >= width - pl)
+        coverBackground.Mutate(i => i
+            // 设置背景色
+            .Fill(coverDominantColor)
+            // 贴上曲绘
+            .DrawImage(cover, width, 0)
+        );
+
+        // 贴上渐变的主题色
+        var rec = new Rectangle(width, 0, width, width);
+        for (var i = rec.Left; i < rec.Right; i += 1)
         {
-            fontSize -= 2;
-            font     =  new Font("Consolas", fontSize);
+            var i1 = i;
+            var c  = Color.FromRgba(colorPixel.R, colorPixel.G, colorPixel.B, (byte)(255 - 255 * (i - rec.Left) / rec.Width));
+
+            coverBackground.Mutate(ctx => ctx
+                .DrawLines(new Pen(c, 1), new PointF(i1, 0), new PointF(i1, rec.Height)));
         }
 
-        g.Clear(bgColor);
+        // 圆角
+        coverBackground.Mutate(i => i.RoundCorners(cornerRadius));
 
-        var x = center
-            ? (int)((width - g.MeasureString(text, font).Width) / 2)
-            : pl;
+        return coverBackground;
+    }
 
-        var y = (int)(height - g.MeasureString(text, font).Height) / 2;
 
-        g.DrawString(string.IsNullOrEmpty(text) ? "-" : text, font, new SolidBrush(fontColor), x, y);
+    public static Image Clear(this Image image, Color color)
+    {
+        image.Mutate(i => i.Fill(color));
+        return image;
+    }
 
-        if (underLine) g.DrawLine(new Pen(Color.Gray, 2), 0, height, width, height);
+    public static Image GetStringCard(
+        string text, int fontSize, Color fontColor, Color bgColor, int width,
+        int height, int paddingLeft = 30, bool center = false, bool underLine = true)
+    {
+        var background = new Image<Rgba32>(width, height);
+
+        // 调整字体大小
+        var fontFamily = SystemFonts.Get("Consolas");
+
+        var font = new Font(fontFamily, fontSize);
+
+        text = string.IsNullOrWhiteSpace(text) ? "N/A" : text;
+
+        while (text.Measure(font).Width >= width - paddingLeft)
+        {
+            fontSize -= 2;
+            font     =  new Font(fontFamily, fontSize);
+        }
+
+        var measure = text.Measure(font);
+
+        var x = center ? (int)((width - measure.Width) / 2) : paddingLeft;
+        var y = (int)(height - measure.Height) / 2;
+
+        background.Mutate(i => i
+            .Fill(bgColor)
+            .DrawText(text, font, fontColor, x, y)
+        );
+
+        if (underLine)
+        {
+            background.Mutate(i =>
+                i.DrawLines(new Pen(Color.Gray, 2), new PointF(0, height), new PointF(width, height)));
+        }
 
         return background;
     }
 
-    public static string ToB64(this Bitmap bmp)
+    #endregion
+
+    #region Draw Image
+
+    public static Image DrawImageCenter(this Image image, Image toDraw, double opacity = 1, int offsetX = 0, int offsetY = 0)
+    {
+        var x = (image.Width - toDraw.Width) / 2;
+        var y = (image.Height - toDraw.Height) / 2;
+
+        return image.DrawImage(toDraw, x + offsetX, y + offsetY, opacity);
+    }
+
+    public static Image DrawImageHCenter(this Image image, Image toDraw, int y, double opacity = 1)
+    {
+        var x = (image.Width - toDraw.Width) / 2;
+
+        return image.DrawImage(toDraw, x, y, opacity);
+    }
+
+    public static IImageProcessingContext DrawImageVCenter(this IImageProcessingContext ctx, Image image, int x, float opacity = 1)
+    {
+        var y = (ctx.GetCurrentSize().Height - image.Height) / 2;
+        return ctx.DrawImage(image, new Point(x, y), opacity);
+    }
+
+    public static Image DrawImageVCenter(this Image image, Image toDraw, int x, double opacity = 1)
+    {
+        image.Mutate(i => i.DrawImageVCenter(toDraw, x, (float)opacity));
+        return image;
+    }
+
+    public static IImageProcessingContext DrawImage(this IImageProcessingContext ctx, Image image, int x, int y, float opacity = 1)
+    {
+        return ctx.DrawImage(image, new Point(x, y), opacity);
+    }
+
+    public static Image DrawImage(this Image image, Image toDraw, int x, int y, double opacity = 1)
+    {
+        image.Mutate(i => i.DrawImage(toDraw, x, y, (float)opacity));
+        return image;
+    }
+
+    #endregion
+
+    #region Draw Text
+
+    public static Image DrawText(this Image img, string text, FontFamily fontFamily, int fontSize, Color color, float x, float y)
+    {
+        img.Mutate(i => i.DrawText(text, fontFamily, fontSize, color, x, y));
+        return img;
+    }
+
+    public static Image DrawTextHCenter(this Image img, string text, Font font, Color color, int y)
+    {
+        var measure = text.MeasureWithSpace(font);
+
+        var x = (img.Width - measure.Width) / 2;
+
+        return img.DrawText(text, font, color, x, y);
+    }
+
+    public static Image DrawTextVCenter(this Image img, string text, Font font, Color color, int x)
+    {
+        var measure = text.MeasureWithSpace(font);
+
+        var y = (img.Height - measure.Height) / 2;
+
+        return img.DrawText(text, font, color, x, y);
+    }
+
+    public static Image DrawTextCenter(this Image img, string text, Font font, Color color, int offsetX = 0, int offsetY = 0, bool withSpace = true)
+    {
+        var measure = withSpace ? text.MeasureWithSpace(font) : text.Measure(font);
+
+        var x = (img.Width - measure.Width) / 2;
+        var y = (img.Height - measure.Height) / 2;
+
+        return withSpace
+            ? img.DrawText(text, font, color, x + offsetX, y + offsetY)
+            : img.DrawText(text, font, color, x + offsetX - measure.X, y + offsetY - measure.Y);
+    }
+
+    public static Image DrawText(this Image img, string text, Font font, Color color, float x, float y)
+    {
+        img.Mutate(i => i.DrawText(text, font, color, x, y));
+        return img;
+    }
+
+    public static IImageProcessingContext DrawText(
+        this IImageProcessingContext ctx, string text, FontFamily fontFamily, int fontSize, Color color, float x, float y)
+    {
+        return ctx.DrawText(text, fontFamily.CreateFont(fontSize), color, x, y);
+    }
+
+    public static TextOptions GetTextOptions(Font font)
+    {
+        return new TextOptions(font)
+        {
+            FallbackFontFamilies = new[]
+            {
+                SystemFonts.Get("FangSong"),
+                SystemFonts.Get("Microsoft JHengHei"),
+                SystemFonts.Get("Segoe Fluent Icons"),
+                SystemFonts.Get("Segoe UI Emoji"),
+                SystemFonts.Get("Segoe UI Historic"),
+                SystemFonts.Get("Segoe UI Symbol"),
+                SystemFonts.Get("Arial Unicode MS"),
+            },
+        };
+    }
+
+    public static TextOptions GetTextOptions(Font font, PointF location)
+    {
+        var option = GetTextOptions(font);
+
+        option.Origin = location;
+
+        return option;
+    }
+
+    public static Image DrawText(this Image image, TextOptions options, string text, Color color)
+    {
+        image.Mutate(i => i.DrawText(options, text, color));
+        return image;
+    }
+
+    public static IImageProcessingContext DrawText(this IImageProcessingContext ctx, string text, Font font, Color color, float x, float y)
+    {
+        return ctx.DrawText(GetTextOptions(font, new PointF(x, y)), text, color);
+    }
+
+    #endregion
+
+    #region Image Cut
+
+    public static IImageProcessingContext RandomCut(this IImageProcessingContext ctx, int w, int h)
+    {
+        var rand = new Random();
+
+        var size = ctx.GetCurrentSize();
+
+        var x = rand.Next(0, size.Width - w);
+        var y = rand.Next(0, size.Height - h);
+
+        return ctx.Crop(new Rectangle(x, y, w, h));
+    }
+
+    public static Image Crop(this Image image, int x, int y, int w, int h)
+    {
+        image.Mutate(i => i.Crop(new Rectangle(x, y, w, h)));
+        return image;
+    }
+
+    public static Image Fit(this Image image, int width, int height)
+    {
+        var aspectRatio  = (double)width / height;
+        var aspectRatio2 = (double)image.Width / image.Height;
+
+        double w, h;
+
+        if (aspectRatio2 > aspectRatio)
+        {
+            w = image.Height * aspectRatio;
+            h = image.Height;
+        }
+        else
+        {
+            w = image.Width;
+            h = image.Width / aspectRatio;
+        }
+
+        return image.Crop((int)((image.Width - w) / 2), (int)((image.Height - h) / 2), (int)w, (int)h).ResizeX(width);
+    }
+
+    #endregion
+
+    #region Resize
+
+    public static Image Resize(this Image image, int width, int height)
+    {
+        image.Mutate(i => i.Resize(width, height));
+        return image;
+    }
+
+    public static Image Resize(this Image image, double scale)
+    {
+        image.Mutate(i => i.Resize(scale));
+        return image;
+    }
+
+    public static IImageProcessingContext Resize(this IImageProcessingContext ctx, double scale)
+    {
+        var size = ctx.GetCurrentSize();
+
+        var width  = size.Width * scale;
+        var height = size.Height * scale;
+
+        return ctx.Resize((int)width, (int)height);
+    }
+
+    public static Image ResizeX(this Image image, int width)
+    {
+        image.Mutate(i => i.ResizeX(width));
+        return image;
+    }
+
+    public static Image ResizeY(this Image image, int height)
+    {
+        image.Mutate(i => i.ResizeY(height));
+        return image;
+    }
+
+
+    public static IImageProcessingContext ResizeX(this IImageProcessingContext ctx, int width)
+    {
+        while (true)
+        {
+            var size = ctx.GetCurrentSize();
+
+            if (size.Width == width) return ctx;
+
+            var scale = (double)width / size.Width;
+            ctx.Resize(scale);
+        }
+    }
+
+    public static IImageProcessingContext ResizeY(this IImageProcessingContext ctx, int height)
+    {
+        while (true)
+        {
+            var size = ctx.GetCurrentSize();
+
+            if (size.Height == height) return ctx;
+
+            var scale = (double)height / size.Height;
+            ctx.Resize(scale);
+        }
+    }
+
+    #endregion
+
+    #region Converter
+
+    public static System.Drawing.Bitmap ToBitmap<TPixel>(this Image<TPixel> image) where TPixel : unmanaged, IPixel<TPixel>
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            using var memoryStream = new MemoryStream();
+
+            var imageEncoder = image.GetConfiguration().ImageFormatsManager.FindEncoder(PngFormat.Instance);
+            image.Save(memoryStream, imageEncoder);
+
+            memoryStream.Seek(0, SeekOrigin.Begin);
+
+            return new System.Drawing.Bitmap(memoryStream);
+        }
+
+        throw new PlatformNotSupportedException($@"{Environment.OSVersion} is not supported");
+    }
+
+    public static Image<TPixel> ToImageSharpImage<TPixel>(this System.Drawing.Bitmap bitmap) where TPixel : unmanaged, IPixel<TPixel>
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            using var memoryStream = new MemoryStream();
+
+            bitmap.Save(memoryStream, System.Drawing.Imaging.ImageFormat.Png);
+
+            memoryStream.Seek(0, SeekOrigin.Begin);
+
+            return Image.Load<TPixel>(memoryStream);
+        }
+
+        throw new PlatformNotSupportedException($@"{Environment.OSVersion} is not supported");
+    }
+
+    public static string ToB64(this Image image, int quality = 90)
     {
         var ms = new MemoryStream();
-        bmp.Save(ms, ImageFormat.Jpeg);
+
+        if (quality < 100)
+        {
+            var encoder = new JpegEncoder
+            {
+                Quality = quality
+            };
+
+            image.SaveAsJpeg(ms, encoder);
+        }
+        else
+        {
+            image.SaveAsPng(ms);
+        }
 
         return Convert.ToBase64String(ms.ToArray());
     }
 
-    public static unsafe Bitmap Blur(this Bitmap image, Rectangle rectangle, int blurSize)
-    {
-        var blurred = new Bitmap(image.Width, image.Height);
-
-        // make an exact copy of the bitmap provided
-        using (var graphics = Graphics.FromImage(blurred))
-        {
-            graphics.DrawImage(image, new Rectangle(0, 0, image.Width, image.Height),
-                new Rectangle(0, 0, image.Width, image.Height), GraphicsUnit.Pixel);
-        }
-
-        // Lock the bitmap's bits
-        var blurredData = blurred.LockBits(new Rectangle(0, 0, image.Width, image.Height),
-            ImageLockMode.ReadWrite, blurred.PixelFormat);
-
-        // Get bits per pixel for current PixelFormat
-        var bitsPerPixel = Image.GetPixelFormatSize(blurred.PixelFormat);
-
-        // Get pointer to first line
-        var scan0 = (byte*)blurredData.Scan0.ToPointer();
-
-        // look at every pixel in the blur rectangle
-        for (var xx = rectangle.X; xx < rectangle.X + rectangle.Width; xx++)
-        for (var yy = rectangle.Y; yy < rectangle.Y + rectangle.Height; yy++)
-        {
-            int avgR           = 0, avgG = 0, avgB = 0;
-            var blurPixelCount = 0;
-
-            // average the color of the red, green and blue for each pixel in the
-            // blur size while making sure you don't go outside the image bounds
-            for (var x = xx; x < xx + blurSize && x < image.Width; x++)
-            for (var y = yy; y < yy + blurSize && y < image.Height; y++)
-            {
-                // Get pointer to RGB
-                var data = scan0 + y * blurredData.Stride + x * bitsPerPixel / 8;
-
-                avgB += data[0]; // Blue
-                avgG += data[1]; // Green
-                avgR += data[2]; // Red
-
-                blurPixelCount++;
-            }
-
-            avgR /= blurPixelCount;
-            avgG /= blurPixelCount;
-            avgB /= blurPixelCount;
-
-            // now that we know the average for the blur size, set each pixel to that color
-            for (var x = xx; x < xx + blurSize && x < image.Width && x < rectangle.Width; x++)
-            for (var y = yy; y < yy + blurSize && y < image.Height && y < rectangle.Height; y++)
-            {
-                // Get pointer to RGB
-                var data = scan0 + y * blurredData.Stride + x * bitsPerPixel / 8;
-
-                // Change values
-                data[0] = (byte)avgB;
-                data[1] = (byte)avgG;
-                data[2] = (byte)avgR;
-            }
-        }
-
-        // Unlock the bits
-        blurred.UnlockBits(blurredData);
-
-        return blurred;
-    }
-
-    public static Bitmap Crop(this Bitmap img, Rectangle cropArea)
-    {
-        var m = new Bitmap(cropArea.Width, cropArea.Height);
-        var g = Graphics.FromImage(m);
-
-        g.DrawImage(img, new Rectangle(0, 0, m.Width, m.Height), cropArea, GraphicsUnit.Pixel);
-
-        return m;
-    }
-
-    public static Bitmap RandomCut(this Bitmap img, int w, int h)
-    {
-        var rand = new Random();
-
-        var x = rand.Next(0, img.Width  - w);
-        var y = rand.Next(0, img.Height - h);
-
-        return img.Crop(new Rectangle(x, y, w, h));
-    }
-
-    public static void DrawStrings(this Graphics g, IEnumerable<(string, Font, Brush)> toDraw, float initX, float initY, float extraPadding=0)
-    {
-        var x = initX;
-        var y = initY;
-
-        float maxHeight = 0;
-        float height    = 0;
-
-        foreach (var (str, font, color) in toDraw)
-        {
-            if (str.Contains('\n'))
-            {
-                foreach (var s in str.Split('\n'))
-                {
-                    height = g.MeasureString(s, font).Height;
-                    maxHeight = maxHeight == 0 ? height : maxHeight;
-
-                    g.DrawString(s, font, color, x, y + maxHeight - height);
-
-                    maxHeight =  Math.Max(height, maxHeight);
-                    x         =  initX;
-                    y         += maxHeight + extraPadding;
-                    maxHeight =  0;
-                }
-
-                y         -= height;
-                maxHeight =  height;
-            }
-            else
-            {
-                height    = g.MeasureString(str, font).Height;
-                maxHeight = maxHeight == 0 ? height : maxHeight;
-
-                g.DrawString(str, font, color, x, y + maxHeight - height);
-                maxHeight =  Math.Max(maxHeight, height);
-                x         += g.MeasureString(str, font).Width;
-            }
-        }
-    }
+    #endregion
 }

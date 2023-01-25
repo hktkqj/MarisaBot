@@ -1,10 +1,56 @@
-﻿using System.Text;
+﻿using System.Security.Cryptography;
+using System.Text;
 using System.Text.RegularExpressions;
+using SixLabors.Fonts;
 
 namespace Marisa.Utils;
 
 public static class StringExt
 {
+    public static string GetMd5Hash(this string text)
+    {
+        if (string.IsNullOrEmpty(text)) return string.Empty;
+
+        using var sha = MD5.Create();
+
+        var textData = Encoding.UTF8.GetBytes(text);
+        var hash     = sha.ComputeHash(textData);
+
+        return BitConverter.ToString(hash).Replace("-", string.Empty);
+    }
+
+    public static string GetSha256Hash(this string text)
+    {
+        if (string.IsNullOrEmpty(text)) return string.Empty;
+
+        using var sha = SHA256.Create();
+
+        var textData = Encoding.UTF8.GetBytes(text);
+        var hash     = sha.ComputeHash(textData);
+
+        return BitConverter.ToString(hash).Replace("-", string.Empty);
+    }
+
+    /// <summary>
+    /// 测量文本大小
+    /// </summary>
+    /// <param name="text"></param>
+    /// <param name="font"></param>
+    /// <returns></returns>
+    public static FontRectangle Measure(this string text, Font font)
+    {
+        var option = ImageDraw.GetTextOptions(font);
+
+        return TextMeasurer.MeasureBounds(text, option);
+    }
+
+    public static FontRectangle MeasureWithSpace(this string text, Font font)
+    {
+        var option = ImageDraw.GetTextOptions(font);
+
+        return TextMeasurer.Measure(text, option);
+    }
+
     /// <summary>
     /// 和原始的 string.StartWith 类似，只不过同时检查多个
     /// </summary>
@@ -12,7 +58,8 @@ public static class StringExt
     /// <param name="prefixes"></param>
     /// <param name="comparer"></param>
     /// <returns></returns>
-    public static bool StartWith(this string str, IEnumerable<string> prefixes,
+    public static bool StartWith(
+        this string str, IEnumerable<string> prefixes,
         StringComparison comparer = StringComparison.Ordinal)
     {
         return prefixes.Any(p => str.StartsWith(p, comparer));
@@ -66,18 +113,40 @@ public static class StringExt
     public static string Escape(this string input)
     {
         var literal = new StringBuilder(input.Length + 2);
-        foreach (var c in input) {
-            switch (c) {
-                case '\"': literal.Append("\\\""); break;
-                case '\\': literal.Append(@"\\"); break;
-                case '\0': literal.Append(@"\0"); break;
-                case '\a': literal.Append(@"\a"); break;
-                case '\b': literal.Append(@"\b"); break;
-                case '\f': literal.Append(@"\f"); break;
-                case '\n': literal.Append(@"\n"); break;
-                case '\r': literal.Append(@"\r"); break;
-                case '\t': literal.Append(@"\t"); break;
-                case '\v': literal.Append(@"\v"); break;
+        foreach (var c in input)
+        {
+            switch (c)
+            {
+                case '\"':
+                    literal.Append("\\\"");
+                    break;
+                case '\\':
+                    literal.Append(@"\\");
+                    break;
+                case '\0':
+                    literal.Append(@"\0");
+                    break;
+                case '\a':
+                    literal.Append(@"\a");
+                    break;
+                case '\b':
+                    literal.Append(@"\b");
+                    break;
+                case '\f':
+                    literal.Append(@"\f");
+                    break;
+                case '\n':
+                    literal.Append(@"\n");
+                    break;
+                case '\r':
+                    literal.Append(@"\r");
+                    break;
+                case '\t':
+                    literal.Append(@"\t");
+                    break;
+                case '\v':
+                    literal.Append(@"\v");
+                    break;
                 default:
                     literal.Append(c);
                     // // ASCII printable character
@@ -91,6 +160,22 @@ public static class StringExt
                     break;
             }
         }
+
         return literal.ToString();
+    }
+
+    public static string RandomString(int length)
+    {
+        const string chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+
+        var stringChars = new char[length];
+        var random      = new Random();
+
+        for (var i = 0; i < stringChars.Length; i++)
+        {
+            stringChars[i] = chars[random.Next(chars.Length)];
+        }
+
+        return new string(stringChars);
     }
 }

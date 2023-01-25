@@ -73,7 +73,7 @@ public class SongScore
         return (int)Math.Floor(Constant * (Math.Min(100.5, Achievement) / 100) * baseRa);
     }
 
-    public int Ra(double? achievement = null)
+    public int Ra()
     {
         return Ra(Achievement, Constant);
     }
@@ -87,13 +87,13 @@ public class SongScore
             < 70    => 6,
             < 75    => 7,
             < 80    => 7.5,
-            < 90    => 8,
-            < 94    => 9,
+            < 90    => 8.5,
+            < 94    => 9.5,
             < 97    => 10.5,
             < 98    => 12.5,
-            < 99    => 12.75,
+            < 99    => 12.7,
             < 99.5  => 13,
-            < 100   => 13.25,
+            < 100   => 13.2,
             < 100.5 => 13.5,
             _       => 14.0
         };

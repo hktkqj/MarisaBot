@@ -6,14 +6,13 @@ using Marisa.EntityFrameworkCore;
 using Marisa.EntityFrameworkCore.Entity.Plugin.Shared;
 using Marisa.Utils;
 using Microsoft.EntityFrameworkCore;
+using SixLabors.ImageSharp.Processing;
 using static Marisa.Plugin.Shared.Dialog.Dialog;
 
 namespace Marisa.Plugin.Shared.Util.SongDb;
 
 public class SongDb<TSong, TSongGuess> where TSong : Song where TSongGuess : SongGuess, new()
 {
-    private const int PageSize = 10;
-
     private readonly string _aliasFilePath;
     private readonly string _tempAliasPath;
 
@@ -23,23 +22,24 @@ public class SongDb<TSong, TSongGuess> where TSong : Song where TSongGuess : Son
     private readonly Func<List<TSong>> _songListGen;
     private readonly string _guessDbSetName;
 
-    private readonly MessageHandlerAdder _songGuessHandlerAdder;
+    public readonly MessageHandlerAdder MessageHandlerAdder;
 
     /// <param name="aliasFilePath">歌曲的别名文件路径，格式是tsv</param>
     /// <param name="tempAliasPath">歌曲临时别名的存放路径</param>
     /// <param name="songListGen">读取歌曲列表的函数</param>
     /// <param name="guessGuessDbSetName">猜歌DbSet名称</param>
-    /// <param name="songGuessHandlerAdder">添加猜曲结果处理器的函数</param>
-    public SongDb(string aliasFilePath, string tempAliasPath, Func<List<TSong>> songListGen,
-        string guessGuessDbSetName, MessageHandlerAdder songGuessHandlerAdder)
+    /// <param name="messageHandlerAdder">添加猜曲结果处理器的函数</param>
+    public SongDb(
+        string aliasFilePath, string tempAliasPath, Func<List<TSong>> songListGen,
+        string guessGuessDbSetName, MessageHandlerAdder messageHandlerAdder)
     {
         _aliasFilePath = aliasFilePath;
         _tempAliasPath = tempAliasPath;
 
         _songListGen = songListGen;
 
-        _guessDbSetName        = guessGuessDbSetName;
-        _songGuessHandlerAdder = songGuessHandlerAdder;
+        _guessDbSetName     = guessGuessDbSetName;
+        MessageHandlerAdder = messageHandlerAdder;
     }
 
     private Dictionary<string, List<string>> GetSongAliases()
@@ -150,6 +150,13 @@ public class SongDb<TSong, TSongGuess> where TSong : Song where TSongGuess : Son
         }
     }
 
+    #region Search
+
+    public TSong? GetSongById(long id)
+    {
+        return SongList.FirstOrDefault(song => song.Id == id);
+    }
+
     public List<TSong> SearchSong(string m)
     {
         if (string.IsNullOrEmpty(m)) return new List<TSong>();
@@ -225,6 +232,26 @@ public class SongDb<TSong, TSongGuess> where TSong : Song where TSongGuess : Son
             .ToList();
     }
 
+    public MessageChain GetSearchResult(IReadOnlyList<TSong> songs)
+    {
+        return songs.Count switch
+        {
+            >= SongDbConfig.PageSize => MessageChain.FromText($"过多的结果（{songs.Count}个）"),
+
+            0 => MessageChain.FromText("“查无此歌”"),
+            1 => new MessageChain(
+                new MessageDataText(songs[0].Title),
+                MessageDataImage.FromBase64(songs[0].GetImage())
+            ),
+            _ => MessageChain.FromText(string.Join('\n',
+                songs.Select(song => $"[ID:{song.Id}, Lv:{song.MaxLevel()}] -> {song.Title}")))
+        };
+    }
+
+    #endregion
+
+    #region Alias
+
     /// <summary>
     /// 获取歌曲的别名列表
     /// </summary>
@@ -246,39 +273,38 @@ public class SongDb<TSong, TSongGuess> where TSong : Song where TSongGuess : Son
     /// <returns>成功与否</returns>
     public bool SetSongAlias(string name, string alias)
     {
-        if (SongList.All(song => song.Title != name)) return false;
-
         lock (SongAlias)
         {
-            File.AppendAllText(_tempAliasPath, $"{name}\t{alias}\n");
-
-            if (SongAlias.ContainsKey(alias))
+            string title;
+            if (long.TryParse(name, out var id))
             {
-                SongAlias[alias].Add(name);
+                var song = GetSongById(id);
+                if (song == null) return false;
+
+                title = song.Title;
             }
             else
             {
-                SongAlias[alias] = new List<string> { name };
+                if (SongList.All(song => song.Title != name)) return false;
+                title = name;
+            }
+
+            File.AppendAllText(_tempAliasPath, $"{title}\t{alias}\n");
+
+            if (SongAlias.ContainsKey(alias))
+            {
+                SongAlias[alias].Add(title);
+            }
+            else
+            {
+                SongAlias[alias] = new List<string> { title };
             }
 
             return true;
         }
     }
 
-    public MessageChain GetSearchResult(IReadOnlyList<TSong> songs)
-    {
-        return songs.Count switch
-        {
-            >= PageSize => MessageChain.FromText($"过多的结果（{songs.Count}个）"),
-            0           => MessageChain.FromText("“查无此歌”"),
-            1 => new MessageChain(
-                new MessageDataText(songs[0].Title),
-                MessageDataImage.FromBase64(songs[0].GetImage())
-            ),
-            _ => MessageChain.FromText(string.Join('\n',
-                songs.Select(song => $"[ID:{song.Id}, Lv:{song.MaxLevel()}] -> {song.Title}")))
-        };
-    }
+    #endregion
 
     #region Guess
 
@@ -357,10 +383,11 @@ public class SongDb<TSong, TSongGuess> where TSong : Song where TSongGuess : Son
                         case 2:
                         {
                             var cover = song.GetCover();
+                            cover.Mutate(i => i.RandomCut(cover.Width / 3, cover.Height / 3));
 
                             hint = new MessageChain(
                                 new MessageDataText("封面裁剪："),
-                                MessageDataImage.FromBase64(cover.RandomCut(cover.Width / 3, cover.Height / 3).ToB64())
+                                MessageDataImage.FromBase64(cover.ToB64())
                             );
                             break;
                         }
@@ -406,7 +433,7 @@ public class SongDb<TSong, TSongGuess> where TSong : Song where TSongGuess : Son
         var senderName = message.Sender!.Name;
         var groupId    = message.GroupInfo!.Id;
         var now        = DateTime.Now;
-        var res        = _songGuessHandlerAdder(groupId, msg => GenGuessDialogHandler(song, now, qq)(msg));
+        var res        = MessageHandlerAdder(groupId, null, msg => GenGuessDialogHandler(song, now, qq)(msg));
 
         if (!res)
         {
@@ -437,7 +464,8 @@ public class SongDb<TSong, TSongGuess> where TSong : Song where TSongGuess : Son
         return true;
     }
 
-    public void StartSongCoverGuess(Message message, long qq, int widthDiv,
+    public void StartSongCoverGuess(
+        Message message, long qq, int widthDiv,
         Func<TSong, bool>? filter)
     {
         var songs = SongList.Where(s => filter?.Invoke(s) ?? true).ToList();
@@ -452,14 +480,16 @@ public class SongDb<TSong, TSongGuess> where TSong : Song where TSongGuess : Son
 
         var cover = song.GetCover();
 
-        var cw = cover.Width  / widthDiv;
+        var cw = cover.Width / widthDiv;
         var ch = cover.Height / widthDiv;
+
+        cover.Mutate(i => i.RandomCut(cw, ch));
 
         if (StartGuess(song, message, qq))
         {
             message.Reply(
                 new MessageDataText("猜曲模式启动！"),
-                MessageDataImage.FromBase64(cover.RandomCut(cw, ch).ToB64()),
+                MessageDataImage.FromBase64(cover.ToB64()),
                 new MessageDataText("艾特我+你的答案以参加猜曲\n答案可以是 `歌曲名`、`歌曲id` 或 `id歌曲id`\n\n发送 ”结束猜曲“ 来退出猜曲模式")
             );
         }

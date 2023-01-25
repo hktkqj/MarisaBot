@@ -1,7 +1,8 @@
 ﻿namespace Marisa.Plugin.RandomPicture;
 
+[MarisaPluginDoc("从作者图库里取出某人的图，例如：看看魔理沙")]
 [MarisaPluginCommand("看看", "kk")]
-[MarisaPluginTrigger(typeof(MarisaPluginTrigger), nameof(MarisaPluginTrigger.PlainTextTrigger))]
+[MarisaPluginTrigger(nameof(MarisaPluginTrigger.PlainTextTrigger))]
 public class KanKan : MarisaPluginBase
 {
     private static string PicDbPath => ConfigurationManager.Configuration.RandomPicture.ImageDatabaseKanKanPath;
@@ -12,10 +13,20 @@ public class KanKan : MarisaPluginBase
     private static IEnumerable<string> AvailableFileExt =>
         ConfigurationManager.Configuration.RandomPicture.AvailableFileExt;
 
-    private static IEnumerable<string> Names =>
-        Directory.GetDirectories(PicDbPath, "*", SearchOption.AllDirectories)
-            .Where(d => PicDbPathExclude.All(e => !d.Contains(e)))
-            .Select(d => d.TrimEnd('\\').TrimEnd('/'));
+    private static IEnumerable<string> Names
+    {
+        get
+        {
+            if (!Directory.Exists(PicDbPath))
+            {
+                return Enumerable.Empty<string>();
+            }
+
+            return Directory.GetDirectories(PicDbPath, "*", SearchOption.AllDirectories)
+                .Where(d => PicDbPathExclude.All(e => !d.Contains(e)))
+                .Select(d => d.TrimEnd('\\').TrimEnd('/'));
+        }
+    }
 
     private static List<string> GetImList(string name)
     {
@@ -32,7 +43,7 @@ public class KanKan : MarisaPluginBase
     {
         if (string.IsNullOrWhiteSpace(m.Command))
         {
-            m.Reply("看你妈，没有，爬！");
+            // m.Reply("看你妈，没有，爬！");
 
             return MarisaPluginTaskState.CompletedTask;
         }
